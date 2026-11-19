@@ -14,6 +14,7 @@ Every branch writes to SQLite, so `ci-healer report` can show exactly what happe
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 
@@ -141,8 +142,32 @@ class Healer:
         self.db.insert_analysis(run_pk, a)
         return a
 
+    def _earlier_attempt_failures(self, ctx: RunContext) -> list[str]:
+        """Tests that failed on earlier attempts of THIS run (same commit).
+
+        Local history first. If it's missing — a different server, or (seen in the live demo)
+        parallel Action runs whose cached databases overwrote each other — ask GitHub: the
+        previous attempt's jobs and logs are still there. The most important flakiness signal
+        must not depend on a cache.
+        """
+        tests = self.db.failing_tests_of_earlier_attempts(ctx.repo, ctx.run_id, ctx.run_attempt)
+        if tests or ctx.run_attempt <= 1:
+            return tests
+        prev = dataclasses.replace(ctx, run_attempt=ctx.run_attempt - 1)
+        found: list[str] = []
+        try:
+            for job in self.gh.list_jobs(ctx.repo, ctx.run_id, prev.run_attempt):
+                if job.get("conclusion") in ("failure", "timed_out"):
+                    ex = logs.extract(self.gh.get_job_log(ctx.repo, job["id"]))
+                    found += [t for t in ex.failing_tests if t not in found]
+        except GitHubError as e:
+            log.warning("could not read attempt %s from GitHub: %s", prev.run_attempt, e)
+            return []
+        self.db.record_test_outcomes(prev, found, "failed")   # backfill local history
+        return found
+
     def _history(self, ctx: RunContext, ex: logs.LogExcerpt) -> dict:
-        earlier = set(self.db.failing_tests_of_earlier_attempts(ctx.repo, ctx.run_id, ctx.run_attempt))
+        earlier = set(self._earlier_attempt_failures(ctx))
         return {
             "failing_tests": {t: self.db.test_history(ctx.repo, t) for t in ex.failing_tests[:10]},
             "reproduced_on_same_commit": sorted(set(ex.failing_tests) & earlier),
@@ -293,7 +318,7 @@ CI on this PR is the verification. This PR will never be merged automatically.""
     def _learn_from_rerun(self, ctx: RunContext, run_pk: int) -> dict:
         """Attempt N>1 of the same run passed → the tests that failed earlier on this very
         commit just passed. Record that; it's the ground truth flaky detection runs on."""
-        earlier = self.db.failing_tests_of_earlier_attempts(ctx.repo, ctx.run_id, ctx.run_attempt)
+        earlier = self._earlier_attempt_failures(ctx)
         self.db.record_test_outcomes(ctx, earlier, "passed")
         self.db.insert_action(run_pk, "learned", "done", self.settings.dry_run,
                               "rerun of the same commit passed → earlier failure was transient",

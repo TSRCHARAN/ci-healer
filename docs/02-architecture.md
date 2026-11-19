@@ -169,6 +169,13 @@ Four PRs that break CI on purpose, all handled concurrently by `TSRCHARAN/ci-hea
   an optional `llm-fallback-model` used only for transient failures (never for a bad key).
   The PR comment for an LLM outage now says so, instead of "category 'unknown' is not auto-fixable".
 
+**Round two (v1.0.1).** The fallback model rescued the 503s; the flaky test was rerun as
+designed; the missing secret was diagnosed as `config`. New finding: the four healer runs ran
+in parallel, each restored the same cached SQLite database and saved its own copy — the newest
+won, so attempt 2 of the flaky run couldn't see attempt 1. → v1.0.2 reads the previous attempt's
+failures straight from GitHub when local history is missing. Cross-commit flake history still
+rides on the cache (best-effort); a shared store is the real fix for a multi-repo deployment.
+
 ## Measuring it (next step after dogfooding)
 
 `analyses` + `actions` already hold predictions and outcomes. The first metrics worth computing:

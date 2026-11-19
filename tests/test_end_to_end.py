@@ -92,6 +92,33 @@ def test_failure_that_reproduces_on_rerun_is_escalated_not_retried_forever(world
     assert r["decision"] == "notify" and gh.reruns == [100]
 
 
+def test_rerun_learning_survives_lost_local_history(world, tmp_path):
+    """Live-demo regression: parallel Action runs overwrote each other's cached DB, so attempt 2
+    couldn't see attempt 1. The earlier attempt is now read back from GitHub instead."""
+    from ci_healer.db import Database
+    from ci_healer.pipeline import Healer
+    healer, gh, an = world
+    test_id = "tests/test_api.py::test_fetch_with_timeout"
+    gh.jobs[(100, 1)] = [make_job(1)]
+    gh.logs[1] = FLAKY_LOG
+    an.classifications.append(cls(Category.FLAKY_TEST, 0.7, tests=[test_id]))
+    healer.handle_workflow_run(payload(run_id=100, attempt=1))
+
+    dbs = iter(range(10))
+
+    def fresh():   # same GitHub, empty database — like a runner that got a stale cache
+        return Healer(healer.settings, Database(str(tmp_path / f"fresh{next(dbs)}.db")), gh, an)
+
+    r = fresh().handle_workflow_run(payload(run_id=100, attempt=2, conclusion="success"))
+    assert r["tests_marked_flaky_evidence"] == [test_id]
+
+    gh.jobs[(100, 2)] = [make_job(2)]
+    gh.logs[2] = FLAKY_LOG
+    an.classifications.append(cls(Category.FLAKY_TEST, 0.7, tests=[test_id]))
+    r = fresh().handle_workflow_run(payload(run_id=100, attempt=2))
+    assert r["jobs"][0]["category"] == "code_break"          # reproduced on the same commit
+
+
 # ------------------------------------------------------------------- the fix story -----
 def test_lint_failure_gets_a_guarded_fix_pr_and_its_ci_is_tracked(world):
     healer, gh, an = world
