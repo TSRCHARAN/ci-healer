@@ -154,6 +154,21 @@ seeded unused import (ruff F401), with a PR between them to trigger CI.
 Follow-up from reading the PR: the evidence block quoted only `Found 1 error.` (the line the
 rule matched). Rule evidence now quotes the actual error lines.
 
+**2026-11-19 — public demo, first run as a GitHub Action** ([ci-healer-demo](https://github.com/TSRCHARAN/ci-healer-demo)).
+Four PRs that break CI on purpose, all handled concurrently by `TSRCHARAN/ci-healer@v1`.
+
+- Lint (F401): rule → fix PR → CI on the fix PR passed → `fix_verified`. The full loop, with no human involved.
+- Flaky timing test: Gemini said `flaky_test` (0.95) — but the branch *also* had an over-long
+  line (a mistake in the demo itself). The bot's lint fix re-wrapped an `assert` line in a test
+  file and the "no rewriting assertions" guardrail rejected it. Conservative but correct: a code
+  check can't tell a harmless re-wrap from a changed expectation. With a non-retryable failure
+  present, no rerun happened — rerunning can't fix a lint error.
+- Real bug / missing secret: Gemini answered **503 "high demand"** and **timed out** while four
+  requests landed at once. ci-healer degraded safely (`unknown`, no action), but that's a miss.
+  → Patient retries (5 s / 15 s / 30 s, honouring `Retry-After`), a `TransientLLMError` type, and
+  an optional `llm-fallback-model` used only for transient failures (never for a bad key).
+  The PR comment for an LLM outage now says so, instead of "category 'unknown' is not auto-fixable".
+
 ## Measuring it (next step after dogfooding)
 
 `analyses` + `actions` already hold predictions and outcomes. The first metrics worth computing:

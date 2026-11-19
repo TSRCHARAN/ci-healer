@@ -136,6 +136,48 @@ def test_auth_and_truncation_errors_are_clear_and_keyless():
         compat("groq", Server((200, '{"category":', "length"))).complete_json("s", "u", Classification, "m")
 
 
+def no_sleep(backend, sleeps):
+    for b in (getattr(backend, "primary", backend), getattr(backend, "secondary", None)):
+        if b is not None:
+            b._sleep = sleeps.append
+    return backend
+
+
+def test_overloaded_primary_falls_back_to_second_model():
+    """Live-demo regression: Gemini answered 503 'high demand'."""
+    srv = Server(*[(503, "This model is currently experiencing high demand")] * 4,
+                 (200, json.dumps(GOOD)))
+    sleeps = []
+    backend = no_sleep(make_backend(resolve("gemini", "m-1", api_key="k", fallback_model="m-2"),
+                                    transport=httpx.MockTransport(srv)), sleeps)
+    result, usage = backend.complete_json("s", "u", Classification, "medium")
+    assert [r["body"]["model"] for r in srv.requests] == ["m-1"] * 4 + ["m-2"]
+    assert sleeps == [5, 15, 30]                       # patient backoff before giving up
+    assert usage["llm"] == "gemini/m-2" and "fallback m-2" in backend.label
+
+
+def test_overload_without_fallback_is_a_transient_error_and_honours_retry_after():
+    from ci_healer.providers import TransientLLMError
+
+    def handler(request):
+        return httpx.Response(429, headers={"retry-after": "2"}, json={"error": "slow down"})
+
+    sleeps = []
+    backend = no_sleep(compat("groq", handler), sleeps)
+    with pytest.raises(TransientLLMError, match="unavailable after retries"):
+        backend.complete_json("s", "u", Classification, "medium")
+    assert sleeps == [2, 2, 2]
+
+
+def test_permanent_errors_do_not_fall_back():
+    srv = Server((401, "bad key"))
+    backend = make_backend(resolve("gemini", "m-1", api_key="k", fallback_model="m-2"),
+                           transport=httpx.MockTransport(srv))
+    with pytest.raises(LLMError, match="rejected the API key"):
+        backend.complete_json("s", "u", Classification, "medium")
+    assert len(srv.requests) == 1
+
+
 def test_list_models_strips_gemini_prefix():
     t = httpx.MockTransport(lambda r: httpx.Response(200, json={"data": [
         {"id": "models/gemini-b"}, {"id": "models/gemini-a"}]}))

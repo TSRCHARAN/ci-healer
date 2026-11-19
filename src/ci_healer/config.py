@@ -33,6 +33,7 @@ class Settings:
     llm_api_key: str = field(default="", repr=False)
     llm_base_url: str = ""
     llm_max_tokens: int = 8192
+    llm_fallback_model: str = ""               # same provider, used when the primary is overloaded
 
     # --- safety envelope -------------------------------------------------------------------
     dry_run: bool = True                       # shadow mode: decide + record, never act
@@ -57,6 +58,7 @@ class Settings:
             llm_api_key=os.getenv("LLM_API_KEY", ""),
             llm_base_url=os.getenv("LLM_BASE_URL", ""),
             llm_max_tokens=int(os.getenv("LLM_MAX_TOKENS", "8192")),
+            llm_fallback_model=os.getenv("LLM_FALLBACK_MODEL", ""),
             db_path=os.getenv("CI_HEALER_DB", "ci_healer.db"),
             dry_run=_bool("CI_HEALER_DRY_RUN", True),
             allowed_repos=frozenset(r.strip().lower() for r in repos.split(",") if r.strip()),
@@ -71,7 +73,8 @@ class Settings:
     def llm_config(self, need_model: bool = True):
         from .providers import resolve
         return resolve(self.llm_provider, self.llm_model, self.llm_api_key, self.llm_base_url,
-                       self.llm_max_tokens, need_model=need_model)
+                       self.llm_max_tokens, need_model=need_model,
+                       fallback_model=self.llm_fallback_model)
 
     def repo_allowed(self, full_name: str) -> bool:
         return full_name.lower() in self.allowed_repos

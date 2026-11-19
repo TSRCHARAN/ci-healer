@@ -26,6 +26,7 @@ code never sees unvalidated model output, whichever provider produced it.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -44,6 +45,11 @@ T = TypeVar("T", bound=BaseModel)
 
 class LLMError(RuntimeError):
     pass
+
+
+class TransientLLMError(LLMError):
+    """Overloaded / rate-limited / timed out — worth retrying later or on another model.
+    (Found in the live demo: Gemini answered 503 'high demand' and timed out under load.)"""
 
 
 class ConfigError(ValueError):
@@ -87,6 +93,7 @@ class LLMConfig:
     api_key: str = field(default="", repr=False)   # never let a key end up in a log line
     base_url: str | None = None
     max_tokens: int = 8192
+    fallback_model: str = ""      # same provider; used only when the primary is overloaded
 
     @property
     def spec(self) -> ProviderSpec:
@@ -98,7 +105,7 @@ class LLMConfig:
 
 
 def resolve(provider: str = "", model: str = "", api_key: str = "", base_url: str = "",
-            max_tokens: int = 8192, *, need_model: bool = True) -> LLMConfig:
+            max_tokens: int = 8192, *, need_model: bool = True, fallback_model: str = "") -> LLMConfig:
     """Validate the user's LLM settings and fill in per-provider defaults."""
     name = (provider or "anthropic").strip().lower()
     spec = PROVIDERS.get(name)
@@ -119,7 +126,7 @@ def resolve(provider: str = "", model: str = "", api_key: str = "", base_url: st
     base = (base_url or spec.base_url or "").rstrip("/") or None
     if spec.protocol == "openai" and not base:
         raise ConfigError(f"provider '{name}' needs LLM_BASE_URL (e.g. http://localhost:8000/v1)")
-    return LLMConfig(name, model, key, base, max_tokens)
+    return LLMConfig(name, model, key, base, max_tokens, (fallback_model or "").strip())
 
 
 # ============================================================================ backends ====
@@ -131,10 +138,40 @@ class Backend(Protocol):
     def list_models(self) -> list[str]: ...
 
 
-def make_backend(cfg: LLMConfig, *, transport: httpx.BaseTransport | None = None) -> Backend:
+def _make_single(cfg: LLMConfig, transport: httpx.BaseTransport | None) -> Backend:
     if cfg.spec.protocol == "anthropic":
         return AnthropicBackend(cfg)
     return OpenAICompatBackend(cfg, transport=transport)
+
+
+def make_backend(cfg: LLMConfig, *, transport: httpx.BaseTransport | None = None) -> Backend:
+    primary = _make_single(cfg, transport)
+    if cfg.fallback_model and cfg.fallback_model != cfg.model:
+        secondary = _make_single(dataclasses.replace(cfg, model=cfg.fallback_model,
+                                                     fallback_model=""), transport)
+        return FallbackBackend(primary, secondary)
+    return primary
+
+
+class FallbackBackend:
+    """Primary model first; on a *transient* failure (overload, rate limit, timeout) try the
+    fallback model once. Permanent errors (bad key, bad request) are not retried — a fallback
+    can't fix those, and hiding them would make misconfiguration harder to spot."""
+
+    def __init__(self, primary: Backend, secondary: Backend):
+        self.primary, self.secondary = primary, secondary
+        self.label = f"{primary.label} (fallback {secondary.label.split('/', 1)[1]})"
+
+    def complete_json(self, system: str, user: str, schema: type[T], effort: str) -> tuple[T, dict]:
+        try:
+            return self.primary.complete_json(system, user, schema, effort)
+        except TransientLLMError as e:
+            log.warning("%s unavailable (%s); trying fallback %s", self.primary.label, e,
+                        self.secondary.label)
+            return self.secondary.complete_json(system, user, schema, effort)
+
+    def list_models(self) -> list[str]:
+        return self.primary.list_models()
 
 
 # --------------------------------------------------------------------- Anthropic ----------
@@ -153,8 +190,9 @@ class AnthropicBackend:
 
     def __init__(self, cfg: LLMConfig, client: anthropic.Anthropic | None = None):
         self.cfg, self.label = cfg, cfg.label
+        # The SDK already retries 429/5xx/connection errors with backoff; give it more patience.
         self.client = client or anthropic.Anthropic(api_key=cfg.api_key or None,
-                                                    base_url=cfg.base_url or None)
+                                                    base_url=cfg.base_url or None, max_retries=4)
 
     def complete_json(self, system: str, user: str, schema: type[T], effort: str) -> tuple[T, dict]:
         model = self.cfg.model
@@ -169,10 +207,12 @@ class AnthropicBackend:
                 messages=[{"role": "user", "content": user}], output_format=schema, **extra)
         except anthropic.AuthenticationError as e:
             raise LLMError("Anthropic authentication failed — check LLM_API_KEY") from e
-        except anthropic.APIConnectionError as e:
-            raise LLMError(f"network error talking to Anthropic: {e}") from e
+        except anthropic.APIConnectionError as e:   # includes timeouts
+            raise TransientLLMError(f"network error talking to Anthropic: {e}") from e
         except anthropic.RateLimitError as e:
-            raise LLMError("rate limited by Anthropic (SDK retries exhausted)") from e
+            raise TransientLLMError("rate limited by Anthropic (SDK retries exhausted)") from e
+        except anthropic.InternalServerError as e:  # 5xx, including 529 overloaded
+            raise TransientLLMError(f"Anthropic unavailable ({e.status_code})") from e
         except anthropic.APIStatusError as e:
             raise LLMError(f"Anthropic API error {e.status_code}: {e.message}") from e
 
@@ -233,25 +273,39 @@ class OpenAICompatBackend:
         headers = {"Content-Type": "application/json", "User-Agent": "ci-healer"}
         if cfg.api_key:
             headers["Authorization"] = f"Bearer {cfg.api_key}"
-        self._http = httpx.Client(base_url=cfg.base_url + "/", headers=headers, timeout=180,
-                                  transport=transport)
+        self._http = httpx.Client(base_url=cfg.base_url + "/", headers=headers,
+                                  timeout=httpx.Timeout(120, connect=15), transport=transport)
         self._mode = 0   # index into MODES; remembered per process once a provider says no
+        self._sleep = time.sleep   # swapped out in tests
 
-    # --- HTTP with small, honest retry policy ---------------------------------------------
+    # --- HTTP with a patient, bounded retry policy ----------------------------------------
+    # Live lesson: under load Gemini returned 503 "high demand" and timed out; two quick
+    # retries over ~6 s weren't enough. Back off 5 s → 15 s → 30 s (≈50 s worst case), honour
+    # Retry-After, then give up with a *transient* error so a fallback model can take over.
+    RETRY_DELAYS = (5, 15, 30)
+    RETRY_STATUS = (408, 429, 500, 502, 503, 504)
+
     def _post(self, body: dict) -> httpx.Response:
-        for attempt in range(3):
+        last = ""
+        for attempt in range(len(self.RETRY_DELAYS) + 1):
+            delay = self.RETRY_DELAYS[attempt] if attempt < len(self.RETRY_DELAYS) else None
             try:
                 r = self._http.post("chat/completions", json=body)
             except httpx.HTTPError as e:
-                if attempt == 2:
-                    raise LLMError(f"network error talking to {self.cfg.provider}: {e}") from e
-                time.sleep(2 ** attempt)
-                continue
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                time.sleep(min(float(r.headers.get("retry-after", 2 ** (attempt + 1))), 30))
-                continue
-            return r
-        return r  # pragma: no cover
+                last = f"network error: {e}"
+            else:
+                if r.status_code not in self.RETRY_STATUS:
+                    return r
+                last = f"HTTP {r.status_code}: {r.text[:200]}"
+                try:
+                    delay = min(float(r.headers["retry-after"]), 60) if delay is not None else None
+                except (KeyError, ValueError):
+                    pass
+            if delay is None:
+                break
+            log.warning("%s: %s — retrying in %ss", self.label, last.splitlines()[0][:120], delay)
+            self._sleep(delay)
+        raise TransientLLMError(f"{self.cfg.provider} unavailable after retries ({last[:200]})")
 
     def _request(self, messages: list[dict], schema: type[BaseModel]) -> dict:
         while True:

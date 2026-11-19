@@ -30,6 +30,7 @@ jobs:
         with:
           llm-provider: gemini
           llm-model: gemini-flash-latest
+          llm-fallback-model: gemini-3.5-flash-lite   # used if the main model is overloaded
           llm-api-key: ${{ secrets.LLM_API_KEY }}
           # Optional: a PAT / GitHub App token so CI runs on fix PRs (GITHUB_TOKEN PRs don't trigger CI).
           github-token: ${{ secrets.CI_HEALER_TOKEN || github.token }}

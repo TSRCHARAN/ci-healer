@@ -12,6 +12,9 @@ inputs:
   llm-model:
     description: "Model id for the provider. Optional for anthropic; required for the others."
     default: ""
+  llm-fallback-model:
+    description: "Optional second model (same provider) used when the main one is overloaded or rate-limited."
+    default: ""
   llm-api-key:
     description: "API key for the provider. Pass it from a secret, e.g. secrets.LLM_API_KEY."
     default: ""
@@ -75,6 +78,7 @@ runs:
       env:
         LLM_PROVIDER: ${{ inputs.llm-provider }}
         LLM_MODEL: ${{ inputs.llm-model }}
+        LLM_FALLBACK_MODEL: ${{ inputs.llm-fallback-model }}
         LLM_API_KEY: ${{ inputs.llm-api-key }}
         LLM_BASE_URL: ${{ inputs.llm-base-url }}
         GITHUB_TOKEN: ${{ inputs.github-token }}

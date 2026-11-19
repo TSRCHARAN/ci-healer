@@ -77,6 +77,8 @@ def reconcile(cls: Classification, history: dict) -> tuple[Classification, bool]
 
 def fix_eligibility(a: JobAnalysis, ctx: RunContext, s: Settings) -> tuple[bool, str]:
     c = a.classification
+    if a.source.startswith("llm-error"):
+        return False, "LLM unavailable, so no diagnosis — re-run the ci-healer job to retry"
     checks = [
         (s.autofix_enabled, "autofix disabled"),
         (not ctx.is_fork, "run is from a fork (untrusted, and we can't push there)"),
