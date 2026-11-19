@@ -37,6 +37,7 @@ nothing is changed. Set `dry-run: "false"` when the verdicts look right.
 | `llm-model` | *(anthropic: `claude-opus-5-5`)* | required for other providers |
 | `llm-api-key` | — | pass from a secret |
 | `llm-fallback-model` | — | second model (same provider) used when the main one is overloaded |
+| `llm-time-budget` | `180` | seconds per LLM question, retries and fallback included (keep under the job timeout) |
 | `github-token` | `github.token` | see note below |
 | `dry-run` | `true` | `false` to actually rerun / open PRs |
 | `comment-on-prs` | `false` | post the diagnosis on the PR when no action is taken |

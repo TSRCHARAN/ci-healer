@@ -169,6 +169,25 @@ def test_overload_without_fallback_is_a_transient_error_and_honours_retry_after(
     assert sleeps == [2, 2, 2]
 
 
+def test_time_budget_bounds_retries_but_each_model_still_gets_one_try():
+    """Live-demo regression: a 10-minute Action job was killed mid-retry and reported nothing."""
+    from ci_healer.providers import TransientLLMError
+    srv = Server((503, "busy"), (503, "busy"))
+    sleeps = []
+    backend = no_sleep(make_backend(resolve("gemini", "m-1", api_key="k", fallback_model="m-2",
+                                            time_budget=0), transport=httpx.MockTransport(srv)), sleeps)
+    with pytest.raises(TransientLLMError, match="time budget exhausted"):
+        backend.complete_json("s", "u", Classification, "medium")
+    assert [r["body"]["model"] for r in srv.requests] == ["m-1", "m-2"]   # one try each, no waiting
+    assert sleeps == []
+
+    srv = Server((503, "busy"), (200, json.dumps(GOOD)))
+    backend = no_sleep(make_backend(resolve("gemini", "m-1", api_key="k", fallback_model="m-2",
+                                            time_budget=0), transport=httpx.MockTransport(srv)), sleeps)
+    result, usage = backend.complete_json("s", "u", Classification, "medium")
+    assert usage["llm"] == "gemini/m-2" and result.category == Category.FLAKY_TEST
+
+
 def test_permanent_errors_do_not_fall_back():
     srv = Server((401, "bad key"))
     backend = make_backend(resolve("gemini", "m-1", api_key="k", fallback_model="m-2"),

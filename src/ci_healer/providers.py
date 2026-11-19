@@ -94,6 +94,7 @@ class LLMConfig:
     base_url: str | None = None
     max_tokens: int = 8192
     fallback_model: str = ""      # same provider; used only when the primary is overloaded
+    time_budget: float = 180.0    # seconds per question, shared by primary + fallback
 
     @property
     def spec(self) -> ProviderSpec:
@@ -105,7 +106,8 @@ class LLMConfig:
 
 
 def resolve(provider: str = "", model: str = "", api_key: str = "", base_url: str = "",
-            max_tokens: int = 8192, *, need_model: bool = True, fallback_model: str = "") -> LLMConfig:
+            max_tokens: int = 8192, *, need_model: bool = True, fallback_model: str = "",
+            time_budget: float = 180.0) -> LLMConfig:
     """Validate the user's LLM settings and fill in per-provider defaults."""
     name = (provider or "anthropic").strip().lower()
     spec = PROVIDERS.get(name)
@@ -126,14 +128,21 @@ def resolve(provider: str = "", model: str = "", api_key: str = "", base_url: st
     base = (base_url or spec.base_url or "").rstrip("/") or None
     if spec.protocol == "openai" and not base:
         raise ConfigError(f"provider '{name}' needs LLM_BASE_URL (e.g. http://localhost:8000/v1)")
-    return LLMConfig(name, model, key, base, max_tokens, (fallback_model or "").strip())
+    return LLMConfig(name, model, key, base, max_tokens, (fallback_model or "").strip(),
+                     max(0.0, float(time_budget)))
 
 
 # ============================================================================ backends ====
 class Backend(Protocol):
     label: str
 
-    def complete_json(self, system: str, user: str, schema: type[T], effort: str) -> tuple[T, dict]: ...
+    def complete_json(self, system: str, user: str, schema: type[T], effort: str,
+                      deadline: float | None = None) -> tuple[T, dict]:
+        """`deadline` is a time.monotonic() instant by which to give up (retries, fallback and
+        all). Without one, the backend applies its configured time budget. Live lesson: a
+        10-minute Action job was killed mid-retry — and a killed job reports nothing — so
+        every question now has a bounded cost in wall-clock time, not just in attempts."""
+        ...
 
     def list_models(self) -> list[str]: ...
 
@@ -161,14 +170,19 @@ class FallbackBackend:
     def __init__(self, primary: Backend, secondary: Backend):
         self.primary, self.secondary = primary, secondary
         self.label = f"{primary.label} (fallback {secondary.label.split('/', 1)[1]})"
+        self.time_budget = getattr(primary, "cfg", None).time_budget if hasattr(primary, "cfg") else 180.0
 
-    def complete_json(self, system: str, user: str, schema: type[T], effort: str) -> tuple[T, dict]:
+    def complete_json(self, system: str, user: str, schema: type[T], effort: str,
+                      deadline: float | None = None) -> tuple[T, dict]:
+        # One budget for the whole question: whatever the primary doesn't use, the fallback
+        # gets — and the fallback always gets at least one attempt.
+        deadline = deadline if deadline is not None else time.monotonic() + self.time_budget
         try:
-            return self.primary.complete_json(system, user, schema, effort)
+            return self.primary.complete_json(system, user, schema, effort, deadline)
         except TransientLLMError as e:
-            log.warning("%s unavailable (%s); trying fallback %s", self.primary.label, e,
-                        self.secondary.label)
-            return self.secondary.complete_json(system, user, schema, effort)
+            log.warning("%s unavailable (%s); trying fallback %s", self.primary.label,
+                        str(e).splitlines()[0][:160], self.secondary.label)
+            return self.secondary.complete_json(system, user, schema, effort, deadline)
 
     def list_models(self) -> list[str]:
         return self.primary.list_models()
@@ -194,15 +208,19 @@ class AnthropicBackend:
         self.client = client or anthropic.Anthropic(api_key=cfg.api_key or None,
                                                     base_url=cfg.base_url or None, max_retries=4)
 
-    def complete_json(self, system: str, user: str, schema: type[T], effort: str) -> tuple[T, dict]:
+    def complete_json(self, system: str, user: str, schema: type[T], effort: str,
+                      deadline: float | None = None) -> tuple[T, dict]:
         model = self.cfg.model
         extra: dict = {}
         if model.startswith(self._FALLBACK_FAMILIES):
             extra.update(betas=[self.FALLBACK_BETA], fallbacks="default")
         if not model.startswith(self._NO_EFFORT):
             extra["output_config"] = {"effort": effort}
+        remaining = (deadline - time.monotonic()) if deadline is not None else self.cfg.time_budget
+        # The SDK retries internally; bound each attempt so the whole question stays in budget.
+        client = self.client.with_options(timeout=max(30.0, min(remaining, 120.0)))
         try:
-            resp = self.client.beta.messages.parse(
+            resp = client.beta.messages.parse(
                 model=model, max_tokens=16000, system=system,
                 messages=[{"role": "user", "content": user}], output_format=schema, **extra)
         except anthropic.AuthenticationError as e:
@@ -278,19 +296,24 @@ class OpenAICompatBackend:
         self._mode = 0   # index into MODES; remembered per process once a provider says no
         self._sleep = time.sleep   # swapped out in tests
 
-    # --- HTTP with a patient, bounded retry policy ----------------------------------------
-    # Live lesson: under load Gemini returned 503 "high demand" and timed out; two quick
-    # retries over ~6 s weren't enough. Back off 5 s → 15 s → 30 s (≈50 s worst case), honour
-    # Retry-After, then give up with a *transient* error so a fallback model can take over.
+    # --- HTTP with a patient but *bounded* retry policy -----------------------------------
+    # Live lessons: (1) under load Gemini returned 503 "high demand" and timed out, so two quick
+    # retries weren't enough → back off 5 s / 15 s / 30 s and honour Retry-After; (2) with two
+    # models × two questions × 2-minute read timeouts, that patience exceeded the Action job's
+    # 10-minute lifetime and the job was killed without reporting anything → every question
+    # has a wall-clock deadline; a retry that can't finish before it is simply not made.
     RETRY_DELAYS = (5, 15, 30)
     RETRY_STATUS = (408, 429, 500, 502, 503, 504)
+    MAX_READ_TIMEOUT = 90.0
 
-    def _post(self, body: dict) -> httpx.Response:
+    def _post(self, body: dict, deadline: float) -> httpx.Response:
         last = ""
         for attempt in range(len(self.RETRY_DELAYS) + 1):
             delay = self.RETRY_DELAYS[attempt] if attempt < len(self.RETRY_DELAYS) else None
+            remaining = deadline - time.monotonic()
+            timeout = httpx.Timeout(max(10.0, min(self.MAX_READ_TIMEOUT, remaining)), connect=15)
             try:
-                r = self._http.post("chat/completions", json=body)
+                r = self._http.post("chat/completions", json=body, timeout=timeout)
             except httpx.HTTPError as e:
                 last = f"network error: {e}"
             else:
@@ -303,11 +326,14 @@ class OpenAICompatBackend:
                     pass
             if delay is None:
                 break
+            if time.monotonic() + delay + 10 > deadline:
+                last += " (time budget exhausted)"
+                break
             log.warning("%s: %s — retrying in %ss", self.label, last.splitlines()[0][:120], delay)
             self._sleep(delay)
         raise TransientLLMError(f"{self.cfg.provider} unavailable after retries ({last[:200]})")
 
-    def _request(self, messages: list[dict], schema: type[BaseModel]) -> dict:
+    def _request(self, messages: list[dict], schema: type[BaseModel], deadline: float) -> dict:
         while True:
             mode = MODES[self._mode]
             body: dict = {"model": self.cfg.model, "messages": messages,
@@ -321,7 +347,7 @@ class OpenAICompatBackend:
             elif mode == "json_object":
                 body["response_format"] = {"type": "json_object"}
 
-            r = self._post(body)
+            r = self._post(body, deadline)
             if r.status_code in (401, 403):
                 raise LLMError(f"{self.cfg.provider} rejected the API key (HTTP {r.status_code}) — check LLM_API_KEY")
             if r.status_code in (400, 422) and mode != "prompt_only":
@@ -332,7 +358,9 @@ class OpenAICompatBackend:
                 raise LLMError(f"{self.cfg.provider} error {r.status_code}: {r.text[:300]}")
             return r.json()
 
-    def complete_json(self, system: str, user: str, schema: type[T], effort: str) -> tuple[T, dict]:
+    def complete_json(self, system: str, user: str, schema: type[T], effort: str,
+                      deadline: float | None = None) -> tuple[T, dict]:
+        deadline = deadline if deadline is not None else time.monotonic() + self.cfg.time_budget
         # The schema is ALSO spelled out in the prompt: providers that only do json_object (or
         # nothing) need it, and it doesn't hurt the ones that enforce it.
         sys_prompt = (f"{system}\n\nRespond with ONLY a JSON object (no prose, no code fences) "
@@ -342,7 +370,7 @@ class OpenAICompatBackend:
         usage = {"llm": self.label, "input_tokens": 0, "output_tokens": 0}
 
         for attempt in range(2):            # first try + one repair round-trip
-            data = self._request(messages, schema)
+            data = self._request(messages, schema, deadline)
             if data.get("model"):   # aliases like "gemini-flash-latest" → record what really ran
                 usage["llm"] = f"{self.cfg.provider}/{str(data['model']).removeprefix('models/')}"
             u = data.get("usage") or {}

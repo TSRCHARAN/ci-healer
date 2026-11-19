@@ -187,6 +187,16 @@ code in front of it — decides. Same lite model, same failure, same prompt fami
 `shop/stats.py` shown it proposed exactly `s[mid - 1] + s[mid]`. Lesson for the taxonomy doc:
 "trivial" is a property of the fix, and you can only judge it once you've seen the code.
 
+**Round four (v1.0.4) — the killed job.** First re-run of #3 on v1.0.3 never reported: Gemini
+served 503s and timeouts to both models, and the healer job hit the workflow's
+`timeout-minutes: 10` mid-retry. A killed job writes no summary and no comment — from the
+outside, ci-healer just went silent. The retry policy was bounded in *attempts* but not in
+*time*: 4 attempts × 2-minute read timeouts × 2 models × 2 questions could exceed the job's
+whole life. Fix: every LLM question gets a wall-clock budget (`LLM_TIME_BUDGET`, default
+180 s) shared by primary and fallback — a retry that can't finish before the deadline isn't
+started, each model still gets at least one try, and read timeouts shrink to fit. Rule of
+thumb: 2 questions × budget + ~2 min install must fit inside `timeout-minutes`.
+
 ## Measuring it (next step after dogfooding)
 
 `analyses` + `actions` already hold predictions and outcomes. The first metrics worth computing:
