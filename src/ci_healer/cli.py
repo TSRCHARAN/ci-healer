@@ -73,8 +73,14 @@ def main(argv: list[str] | None = None) -> int:
     sm = sub.add_parser("models")
     _add_llm_flags(sm)
 
+    sub.add_parser("action", help="run inside a GitHub Actions `on: workflow_run` job")
+
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    if args.cmd == "action":
+        from .action import run_action
+        return run_action()
 
     if args.cmd == "serve":
         import uvicorn

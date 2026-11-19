@@ -1,0 +1,94 @@
+name: "ci-healer — self-healing CI"
+description: "Classify failed workflow runs (flaky / infra / lint / real break), retry transient failures, and open guarded fix PRs."
+author: "TSRCHARAN"
+branding:
+  icon: activity
+  color: green
+
+inputs:
+  llm-provider:
+    description: "anthropic | gemini | groq | openai | openrouter | mistral | deepseek | together | ollama | openai_compatible"
+    default: "anthropic"
+  llm-model:
+    description: "Model id for the provider. Optional for anthropic; required for the others."
+    default: ""
+  llm-api-key:
+    description: "API key for the provider. Pass it from a secret, e.g. secrets.LLM_API_KEY."
+    default: ""
+  llm-base-url:
+    description: "Only for openai_compatible endpoints or proxies."
+    default: ""
+  github-token:
+    description: >-
+      Token used to read logs, rerun jobs and open fix PRs. The default GITHUB_TOKEN works, but
+      GitHub does not run CI on PRs it creates — pass a PAT or GitHub App token if you want CI to
+      verify ci-healer's fix PRs.
+    default: ${{ github.token }}
+  dry-run:
+    description: "true = only report what it would do (job summary). false = actually rerun / open PRs."
+    default: "true"
+  comment-on-prs:
+    description: "Post the diagnosis as a PR comment when no automatic action is taken."
+    default: "false"
+  max-reruns:
+    description: "Extra attempts ci-healer may trigger per run."
+    default: "1"
+  autofix:
+    description: "Allow fix PRs at all (still subject to every guardrail)."
+    default: "true"
+  python-version:
+    description: "Python used to run ci-healer."
+    default: "3.12"
+
+outputs:
+  decision:
+    description: "rerun | fix_pr | notify | learned | fix_verification | ok | ignored"
+    value: ${{ steps.heal.outputs.decision }}
+  category:
+    description: "Category of the first failed job (e.g. flaky_test, lint_format)."
+    value: ${{ steps.heal.outputs.category }}
+  pr-url:
+    description: "URL of the fix PR, when one was opened."
+    value: ${{ steps.heal.outputs.pr-url }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # The action's own repo is the package: install it from the checked-out action path.
+    - shell: bash
+      run: python -m pip install --quiet --disable-pip-version-check "${{ github.action_path }}"
+
+    # History (flaky evidence, past verdicts) lives in SQLite. Runners are ephemeral, so the
+    # database is carried between runs in the Actions cache: restore the newest, save a new one.
+    - uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/ci-healer
+        key: ci-healer-db-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ci-healer-db-
+
+    - id: heal
+      shell: bash
+      env:
+        LLM_PROVIDER: ${{ inputs.llm-provider }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        CI_HEALER_DRY_RUN: ${{ inputs.dry-run }}
+        CI_HEALER_COMMENT_ON_PRS: ${{ inputs.comment-on-prs }}
+        CI_HEALER_MAX_RERUNS: ${{ inputs.max-reruns }}
+        CI_HEALER_AUTOFIX: ${{ inputs.autofix }}
+        CI_HEALER_DB: ${{ runner.temp }}/ci-healer/ci_healer.db
+      run: |
+        mkdir -p "$RUNNER_TEMP/ci-healer"
+        ci-healer action
+
+    - if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/ci-healer
+        key: ci-healer-db-${{ github.run_id }}-${{ github.run_attempt }}

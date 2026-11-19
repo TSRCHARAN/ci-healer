@@ -1,0 +1,37 @@
+# Copy to .github/workflows/ci-healer.yml in your repo.
+# Change "ci" below to the name of the workflow you want healed.
+name: ci-healer
+
+on:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+
+permissions:
+  actions: write         # read logs, re-run failed jobs
+  contents: write        # create fix branches
+  pull-requests: write   # open fix PRs, comment diagnoses
+
+# One healer at a time per branch, so two events can't both act on the same failure.
+concurrency:
+  group: ci-healer-${{ github.event.workflow_run.head_branch }}
+
+jobs:
+  heal:
+    # Failures need healing; successful re-runs and fix-branch runs are how it learns.
+    if: >-
+      contains(fromJSON('["failure","timed_out","startup_failure"]'), github.event.workflow_run.conclusion) ||
+      github.event.workflow_run.run_attempt > 1 ||
+      startsWith(github.event.workflow_run.head_branch, 'ci-healer/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: TSRCHARAN/ci-healer@v1
+        with:
+          llm-provider: gemini
+          llm-model: gemini-flash-latest
+          llm-api-key: ${{ secrets.LLM_API_KEY }}
+          # Optional: a PAT / GitHub App token so CI runs on fix PRs (GITHUB_TOKEN PRs don't trigger CI).
+          github-token: ${{ secrets.CI_HEALER_TOKEN || github.token }}
+          dry-run: "true"          # start in shadow mode; flip to "false" when you trust it
+          comment-on-prs: "true"
