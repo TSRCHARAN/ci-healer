@@ -39,6 +39,9 @@ inputs:
   autofix:
     description: "Allow fix PRs at all (still subject to every guardrail)."
     default: "true"
+  investigate:
+    description: "For a failing test, read the modules it imports (read-only) before deciding whether a fix is trivial."
+    default: "true"
   python-version:
     description: "Python used to run ci-healer."
     default: "3.12"
@@ -86,6 +89,7 @@ runs:
         CI_HEALER_COMMENT_ON_PRS: ${{ inputs.comment-on-prs }}
         CI_HEALER_MAX_RERUNS: ${{ inputs.max-reruns }}
         CI_HEALER_AUTOFIX: ${{ inputs.autofix }}
+        CI_HEALER_INVESTIGATE: ${{ inputs.investigate }}
         CI_HEALER_DB: ${{ runner.temp }}/ci-healer/ci_healer.db
       run: |
         mkdir -p "$RUNNER_TEMP/ci-healer"

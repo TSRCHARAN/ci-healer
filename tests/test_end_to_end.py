@@ -192,6 +192,68 @@ def test_partial_lint_fix_is_rejected(world):
     assert gh.pulls == []
 
 
+PYTEST_BUG_LOG = None  # built lazily below
+
+
+def _bug_log():
+    from conftest import SETUP, gh_log
+    return gh_log(*SETUP,
+        "##[group]Run pytest -q", "pytest -q", "##[endgroup]",
+        "...F",
+        "=================================== FAILURES ===================================",
+        "______________________________ test_median_even _______________________________",
+        "    def test_median_even():",
+        ">       assert median([4, 1, 3, 2]) == 2.5",
+        "E       assert 3.5 == 2.5",
+        "tests/test_stats.py:14: AssertionError",
+        "=========================== short test summary info ============================",
+        "FAILED tests/test_stats.py::test_median_even - assert 3.5 == 2.5",
+        "1 failed, 3 passed in 0.19s",
+        "##[error]Process completed with exit code 1.")
+
+
+STATS_PY = ("def median(values):\n    s = sorted(values)\n    mid = len(s) // 2\n"
+            "    if len(s) % 2:\n        return s[mid]\n    return (s[mid] + s[mid + 1]) / 2\n")
+TEST_STATS_PY = "from shop.stats import median\n\n\ndef test_median_even():\n    assert median([4, 1, 3, 2]) == 2.5\n"
+
+
+def test_code_break_investigates_imports_and_fixes_the_source(world):
+    """Demo #3 regression: the log only names the test; the bug is in what it imports."""
+    healer, gh, an = world
+    gh.jobs[(400, 1)] = [make_job(11, "Run pytest -q")]
+    gh.logs[11] = _bug_log()
+    gh.files["tests/test_stats.py"] = TEST_STATS_PY
+    gh.files["shop/stats.py"] = STATS_PY
+    gh.files["shop/__init__.py"] = ""
+    gh.branch_shas["feature/x"] = "a" * 40
+    # Classifier (log only) says: real break, NOT trivially fixable — exactly what Gemini said.
+    an.classifications.append(cls(Category.CODE_BREAK, 0.95, trivial=False,
+                                  tests=["tests/test_stats.py::test_median_even"]))
+    an.proposals.append(FixProposal(
+        can_fix=True, explanation="Even-length median averaged the wrong pair of elements.",
+        pr_title="Fix off-by-one in median for even-length lists",
+        edits=[FileEdit(path="shop/stats.py", old_string="return (s[mid] + s[mid + 1]) / 2",
+                        new_string="return (s[mid - 1] + s[mid]) / 2")]))
+
+    r = healer.handle_workflow_run(payload(run_id=400))
+    assert r["decision"] == "fix_pr" and r["outcome"]["fix_pr"] == "opened"
+    shown = an.fix_calls[0]["files"]
+    assert set(shown) == {"tests/test_stats.py", "shop/stats.py"}   # import was followed
+    assert gh.commits[0][1] == {"shop/stats.py": STATS_PY.replace("s[mid] + s[mid + 1]", "s[mid - 1] + s[mid]")}
+
+
+def test_code_break_investigation_can_be_switched_off(world):
+    healer, gh, an = world
+    healer.settings = dataclasses.replace(healer.settings, investigate_code_breaks=False)
+    gh.jobs[(400, 1)] = [make_job(11, "Run pytest -q")]
+    gh.logs[11] = _bug_log()
+    an.classifications.append(cls(Category.CODE_BREAK, 0.95, trivial=False,
+                                  tests=["tests/test_stats.py::test_median_even"]))
+    r = healer.handle_workflow_run(payload(run_id=400))
+    assert r["decision"] == "notify" and "investigation is off" in r["reason"]
+    assert an.fix_calls == []
+
+
 def test_stale_commit_is_not_fixed(world):
     healer, gh, an = world
     gh.jobs[(300, 1)] = [make_job(9, "Lint")]

@@ -7,7 +7,7 @@ works out *what kind* of failure it is, and does the right thing:
 |---|---|
 | Infra / network blip (runner died, registry 503, DNS…) | Re-runs the failed jobs once |
 | Flaky test | Re-runs once, and **remembers** — if the rerun of the same commit passes, that test is recorded as flaky and recognised next time |
-| Lint / format / trivial break | Opens a small **fix PR** — only if it passes every guardrail |
+| Lint / format / trivial break | Opens a small **fix PR** — only if it passes every guardrail. For a failing test it first reads (never runs) the modules the test imports, so an off-by-one in `shop/stats.py` is found from `tests/test_stats.py` |
 | Real bug, config problem, anything risky | Explains the diagnosis (job summary / PR comment) and leaves it to you |
 
 Classification is cheap-first: known error signatures are matched by rules (free), and only the
@@ -42,6 +42,7 @@ nothing is changed. Set `dry-run: "false"` when the verdicts look right.
 | `comment-on-prs` | `false` | post the diagnosis on the PR when no action is taken |
 | `max-reruns` | `1` | extra attempts per run |
 | `autofix` | `true` | allow fix PRs at all |
+| `investigate` | `true` | for failing tests, read the imported source (Python) before judging the fix |
 
 Outputs: `decision`, `category`, `pr-url`.
 

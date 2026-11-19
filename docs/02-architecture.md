@@ -176,6 +176,17 @@ won, so attempt 2 of the flaky run couldn't see attempt 1. → v1.0.2 reads the 
 failures straight from GitHub when local history is missing. Cross-commit flake history still
 rides on the cache (best-effort); a shared store is the real fix for a multi-repo deployment.
 
+**Round three (v1.0.3) — the off-by-one.** With the key and overload issues out of the way,
+both Gemini models still diagnosed the median bug precisely and declined to fix it. Root cause
+was ours, not theirs: the "is a trivial fix possible?" question was asked of the *classifier*,
+which sees only the log — and a wrong return value never puts the broken line in the log. Lint
+errors do (`file:line`), which is why those got fixed. Fix: for a confident `code_break`,
+`source.py` statically resolves the failing test file's imports against the commit tree
+(Python; nothing executed), those modules are fetched read-only, and the *fix* step — with the
+code in front of it — decides. Same lite model, same failure, same prompt family: with
+`shop/stats.py` shown it proposed exactly `s[mid - 1] + s[mid]`. Lesson for the taxonomy doc:
+"trivial" is a property of the fix, and you can only judge it once you've seen the code.
+
 ## Measuring it (next step after dogfooding)
 
 `analyses` + `actions` already hold predictions and outcomes. The first metrics worth computing:

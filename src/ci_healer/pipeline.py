@@ -18,10 +18,11 @@ import dataclasses
 import json
 import logging
 
-from . import logs, policy, rules
+from . import logs, policy, rules, source
 from .config import Settings
 from .db import Database
-from .fixer import FixRejected, apply_edits, fence_safe, is_forbidden, normalise_path, validate
+from .fixer import (TEST_PATH, FixRejected, apply_edits, fence_safe, is_forbidden, normalise_path,
+                    validate)
 from .github import GitHubClient, GitHubError
 from .llm import Analyzer, LLMAnalyzer, LLMError, unknown
 from .providers import make_backend
@@ -31,7 +32,7 @@ log = logging.getLogger("ci_healer")
 
 FAILED_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 MAX_JOBS_PER_RUN = 3          # bound cost on matrix builds where 20 jobs fail the same way
-MAX_CANDIDATE_FILES = 5
+MAX_CANDIDATE_FILES = 6
 MAX_FILE_BYTES = 100_000
 CONFIG_EXTS = (".toml", ".cfg", ".ini", ".json", ".yml", ".yaml")
 
@@ -270,11 +271,31 @@ class Healer:
                               f"the proposal leaves untouched (CI would stay red)")
 
     def _fetch_candidates(self, ctx: RunContext, a: JobAnalysis) -> dict[str, str]:
+        """Files to show the fixer, in priority order:
+        1. what the classifier / the log named (lint errors point straight at the line);
+        2. the failing tests' own files;
+        3. the repo modules those test files import — where a logic bug actually lives.
+        Everything is read-only, via the API, at the failing commit; nothing is executed."""
         tree = self.gh.list_tree(ctx.repo, ctx.head_sha)
         files: dict[str, str] = {}
-        for raw in a.classification.implicated_files + a.file_refs:
+        wanted = (a.classification.implicated_files + a.file_refs
+                  + source.files_of_failing_tests(a.classification.failing_tests))
+        self._fetch_into(files, wanted, ctx, tree)
+
+        if self.settings.investigate_code_breaks and a.classification.category == Category.CODE_BREAK:
+            imported: list[str] = []
+            for path, text in list(files.items()):
+                if TEST_PATH.search(path) and path.endswith(".py"):
+                    imported += [p for p in source.imported_repo_files(text, path, tree)
+                                 if p not in imported]
+            self._fetch_into(files, imported, ctx, tree)
+        return files
+
+    def _fetch_into(self, files: dict[str, str], paths: list[str], ctx: RunContext,
+                    tree: list[str]) -> None:
+        for raw in paths:
             if len(files) >= MAX_CANDIDATE_FILES:
-                break
+                return
             try:
                 path = resolve_repo_path(normalise_path(raw), tree)
             except FixRejected:
@@ -284,7 +305,6 @@ class Healer:
             content = self.gh.get_file(ctx.repo, path, ctx.head_sha)
             if content is not None and len(content) <= MAX_FILE_BYTES:
                 files[path] = content
-        return files
 
     def _pr_body(self, a: JobAnalysis, ctx: RunContext, explanation: str, diff: str) -> str:
         c = a.classification

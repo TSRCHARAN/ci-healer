@@ -85,7 +85,14 @@ def fix_eligibility(a: JobAnalysis, ctx: RunContext, s: Settings) -> tuple[bool,
         (bool(ctx.head_branch), "run has no branch (tag or detached)"),
         (not ctx.head_branch.startswith(s.fix_branch_prefix), "run is on our own fix branch"),
         (c.category in FIXABLE, f"category '{c.category.value}' is not auto-fixable"),
-        (c.trivial_fix_possible, "fix judged non-trivial"),
+        # The classifier judges "trivial" from the log alone. For a code break that's an unfair
+        # question — the broken line is usually in a file the log never names. So when
+        # investigation is on, a code break with identifiable tests/files goes on to the fix
+        # step, which reads the source and may still decline. Lint keeps the strict gate.
+        (c.trivial_fix_possible or (
+            s.investigate_code_breaks and c.category == Category.CODE_BREAK
+            and bool(c.failing_tests or c.implicated_files)),
+         "fix judged non-trivial from the log, and investigation is off"),
         (c.confidence >= s.min_fix_confidence,
          f"confidence {c.confidence:.2f} < {s.min_fix_confidence}"),
         (bool(c.implicated_files or a.file_refs), "no candidate source files identified"),

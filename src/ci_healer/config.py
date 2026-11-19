@@ -44,6 +44,7 @@ class Settings:
     max_fix_files: int = 3
     max_fix_changed_lines: int = 40
     min_fix_confidence: float = 0.8
+    investigate_code_breaks: bool = True       # read the failing test's imports before deciding
     comment_on_prs: bool = False
 
     @classmethod
@@ -67,6 +68,7 @@ class Settings:
             max_fix_files=int(os.getenv("CI_HEALER_MAX_FIX_FILES", "3")),
             max_fix_changed_lines=int(os.getenv("CI_HEALER_MAX_FIX_LINES", "40")),
             min_fix_confidence=float(os.getenv("CI_HEALER_MIN_FIX_CONFIDENCE", "0.8")),
+            investigate_code_breaks=_bool("CI_HEALER_INVESTIGATE", True),
             comment_on_prs=_bool("CI_HEALER_COMMENT_ON_PRS", False),
         )
 
