@@ -89,3 +89,7 @@ Copy-Item .env.example .env        # LLM_PROVIDER / LLM_MODEL / LLM_API_KEY, GIT
 ```
 
 `analyze` accepts `--provider` / `--model` to compare LLMs on the same failure.
+
+## License
+
+[MIT](LICENSE). Use it, change it, ship it; keep the copyright line.
