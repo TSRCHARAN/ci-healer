@@ -197,6 +197,15 @@ whole life. Fix: every LLM question gets a wall-clock budget (`LLM_TIME_BUDGET`,
 started, each model still gets at least one try, and read timeouts shrink to fit. Rule of
 thumb: 2 questions × budget + ~2 min install must fit inside `timeout-minutes`.
 
+**Round five (v1.0.5) — the license.** No code change. Both repos were public without a
+license file, which legally means "all rights reserved": people could read the Action but,
+strictly, not use it. v1.0.5 adds the MIT license (`LICENSE`, plus `license = "MIT"` in
+`pyproject.toml` so the package metadata carries it), and the moving `v1` tag was advanced so
+`uses: TSRCHARAN/ci-healer@v1` resolves to licensed code. MIT because it is what users of a
+GitHub Action expect: use, modify and redistribute freely, keep the copyright line, no
+warranty. Lesson: a project is not "open source" until the license file exists, and the
+major tag has to move for the change to reach anyone.
+
 ## Measuring it (next step after dogfooding)
 
 `analyses` + `actions` already hold predictions and outcomes. The first metrics worth computing:
