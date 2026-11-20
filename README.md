@@ -17,6 +17,8 @@ Ollama, or any OpenAI-compatible endpoint.
 **See it live:** [TSRCHARAN/ci-healer-demo](https://github.com/TSRCHARAN/ci-healer-demo) has
 branches that break on purpose and the PRs ci-healer opened for them.
 
+![ci-healer walkthrough: a failing PR, the bot's diagnosis, and the one-line fix PR it opened](docs/demo.gif)
+
 ## Use it as a GitHub Action
 
 1. **Add your LLM key** as a repository secret named `LLM_API_KEY`
