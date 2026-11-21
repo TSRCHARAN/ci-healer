@@ -21,15 +21,34 @@ branches that break on purpose and the PRs ci-healer opened for them.
 
 ## Use it as a GitHub Action
 
-1. **Add your LLM key** as a repository secret named `LLM_API_KEY`
-   (Settings → Secrets and variables → Actions).
-2. **Let Actions open PRs:** Settings → Actions → General → Workflow permissions →
-   tick *Allow GitHub Actions to create and approve pull requests*.
-3. **Add the workflow** — copy [examples/ci-healer.yml](examples/ci-healer.yml) to
-   `.github/workflows/ci-healer.yml` and set `workflows: ["<your CI workflow name>"]`.
+Setup is one secret, one setting and one file. Nothing to host, no account with us: it runs
+on your repo's own GitHub Actions runners.
 
-It starts in **dry-run**: every failed run gets a ci-healer report in its job summary, and
-nothing is changed. Set `dry-run: "false"` when the verdicts look right.
+1. **Get an LLM key** from the provider you want to use (Google AI Studio for Gemini, Groq,
+   Anthropic, OpenAI, …). This is the only thing you create outside GitHub.
+2. **Store the key in your repo:** Settings → Secrets and variables → Actions → *New repository
+   secret*, named `LLM_API_KEY`. Only the key is secret; the provider and model names are not
+   sensitive and go straight in the workflow file.
+3. **Let Actions open PRs:** Settings → Actions → General → Workflow permissions → tick
+   *Allow GitHub Actions to create and approve pull requests*. It is off by default; without it
+   ci-healer can diagnose but cannot open a fix PR.
+4. **Add the workflow:** copy [examples/ci-healer.yml](examples/ci-healer.yml) to
+   `.github/workflows/ci-healer.yml`, set `workflows: ["<your CI workflow name>"]`, and set
+   `llm-provider` / `llm-model` to match your key. Commit it. Setup is done.
+5. **Watch it in shadow mode for a week or two.** The example starts with `dry-run: "true"`:
+   on every CI failure ci-healer reads the log, asks the LLM, and decides what it *would* do,
+   but changes nothing: no re-run, no PR, no comment. Its report is the **job summary** of the
+   ci-healer run (Actions tab → *ci-healer* workflow → the run → Summary), with the category,
+   confidence, evidence from the log and, for a fix, the exact diff it would have opened. The
+   LLM key is used in this mode, so it costs the same tokens as live.
+6. **Switch it on** when the verdicts look right: change `dry-run` to `"false"`. From then on a
+   flaky test or infra blip is re-run once, a lint error or small obvious bug gets a fix PR, and
+   everything else gets a diagnosis and no change. You still review and merge every fix PR.
+7. **Optional: let CI check the fix PRs.** With only the steps above, fix PRs open fine but show
+   no CI result, because GitHub does not run workflows on PRs created by a workflow's built-in
+   token. For the green tick, create a fine-grained personal access token (Actions, Contents,
+   Pull requests: read & write; **not** Workflows), store it as the secret `CI_HEALER_TOKEN`,
+   and the example workflow picks it up automatically. Most people add this later.
 
 ### Inputs
 
@@ -40,8 +59,8 @@ nothing is changed. Set `dry-run: "false"` when the verdicts look right.
 | `llm-api-key` | — | pass from a secret |
 | `llm-fallback-model` | — | second model (same provider) used when the main one is overloaded |
 | `llm-time-budget` | `180` | seconds per LLM question, retries and fallback included (keep under the job timeout) |
-| `github-token` | `github.token` | see note below |
-| `dry-run` | `true` | `false` to actually rerun / open PRs |
+| `github-token` | `github.token` | optional PAT, see step 7 and the token note |
+| `dry-run` | `true` | shadow mode: report only. `false` to actually rerun / open PRs / comment |
 | `comment-on-prs` | `false` | post the diagnosis on the PR when no action is taken |
 | `max-reruns` | `1` | extra attempts per run |
 | `autofix` | `true` | allow fix PRs at all |
@@ -49,12 +68,7 @@ nothing is changed. Set `dry-run: "false"` when the verdicts look right.
 
 Outputs: `decision`, `category`, `pr-url`.
 
-**Token note:** GitHub deliberately doesn't trigger workflows from PRs created with the default
-`GITHUB_TOKEN`, so fix PRs opened that way won't get CI. To have CI verify fix PRs, store a
-fine-grained PAT (Contents, Pull requests, Actions: read & write — *not* Workflows) as
-`CI_HEALER_TOKEN`; the example workflow uses it when present.
-
-Leave the **Workflows** permission off on purpose: ci-healer's own guardrail already refuses to
+**Token note.** See step 7 above for the optional PAT. Leave its **Workflows** permission off on purpose: ci-healer's own guardrail already refuses to
 touch `.github/`, and a token that cannot edit workflow files makes GitHub itself refuse too, a
 second wall that holds even if a future bug got past the first. A fix PR never needs it.
 
