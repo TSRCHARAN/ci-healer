@@ -206,6 +206,16 @@ GitHub Action expect: use, modify and redistribute freely, keep the copyright li
 warranty. Lesson: a project is not "open source" until the license file exists, and the
 major tag has to move for the change to reach anyone.
 
+**Round six (v1.0.6) — the shop window.** Listing on the GitHub Marketplace changed nothing in
+how the Action runs; it only makes it findable from any repo's Actions tab. Two things had to be
+true first: the `name` in `action.yml` becomes the listing title and URL slug, so it was shortened
+from "ci-healer — self-healing CI" to plain `ci-healer` (the description already says the rest),
+and the package version in `pyproject.toml`, still 0.1.0 from day one, was aligned with the tags.
+The Marketplace reads `action.yml` from the released tag, so a rename means a new tag, and `v1`
+moves with it. A GitHub Release is created as a draft from the CLI; the Marketplace checkbox is
+UI-only, so the owner ticks it. Categories: *AI Assisted* (where the nearest neighbours sit) and
+*Continuous integration* (what it does).
+
 ## Measuring it (next step after dogfooding)
 
 `analyses` + `actions` already hold predictions and outcomes. The first metrics worth computing:
