@@ -54,6 +54,15 @@ Outputs: `decision`, `category`, `pr-url`.
 fine-grained PAT (Contents, Pull requests, Actions: read & write — *not* Workflows) as
 `CI_HEALER_TOKEN`; the example workflow uses it when present.
 
+Leave the **Workflows** permission off on purpose: ci-healer's own guardrail already refuses to
+touch `.github/`, and a token that cannot edit workflow files makes GitHub itself refuse too, a
+second wall that holds even if a future bug got past the first. A fix PR never needs it.
+
+Without a PAT, ci-healer still works: diagnoses and re-runs need nothing extra, and fix PRs are
+opened with the built-in token, just without CI on them. If the token cannot open a PR at all
+(missing `permissions`, or the "create and approve pull requests" setting still off), the job
+summary says so and the run ends with a diagnosis instead of a fix.
+
 ## Safety model
 
 - **Guardrails are code, not prompts.** Fix PRs are rejected if they touch workflows, lockfiles
