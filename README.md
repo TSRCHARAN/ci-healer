@@ -22,6 +22,8 @@ branches that break on purpose and the PRs ci-healer opened for them.
 
 ![ci-healer walkthrough: a failing PR, the bot's diagnosis, and the one-line fix PR it opened](docs/demo.gif)
 
+*Prefer a voice-over? [Two-minute narrated video](https://github.com/TSRCHARAN/ci-healer/releases/download/v1.0.7/demo.mp4) (MP4, 3 MB).*
+
 ## Use it as a GitHub Action
 
 Setup is one secret, one setting and one file. Nothing to host, no account with us: it runs

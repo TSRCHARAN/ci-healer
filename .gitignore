@@ -7,3 +7,6 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
+
+# The narrated demo video lives on the GitHub release as an asset, not in the tree.
+docs/demo.mp4
