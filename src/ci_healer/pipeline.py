@@ -23,7 +23,7 @@ from .config import Settings
 from .db import Database
 from .fixer import (TEST_PATH, FixRejected, apply_edits, fence_safe, is_forbidden, normalise_path,
                     validate)
-from .github import GitHubClient, GitHubError
+from .github import GitHubClient, GitHubError, explain
 from .llm import Analyzer, LLMAnalyzer, LLMError, unknown
 from .providers import make_backend
 from .models import Category, JobAnalysis, RunContext
@@ -185,8 +185,8 @@ class Healer:
             try:
                 self.gh.rerun_failed_jobs(ctx.repo, ctx.run_id)
             except GitHubError as e:
-                self.db.insert_action(run_pk, "rerun", "failed", False, d.reason, {"error": str(e)})
-                return {"rerun": f"failed: {e}"}
+                self.db.insert_action(run_pk, "rerun", "failed", False, d.reason, {"error": explain(e)})
+                return {"rerun": f"failed: {explain(e)}"}
             self.db.insert_action(run_pk, "rerun", "done", False, d.reason)
             return {"rerun": "triggered"}
 
@@ -250,8 +250,8 @@ class Healer:
                                      title=f"[ci-healer] {proposal.pr_title}",
                                      body=self._pr_body(a, ctx, proposal.explanation, diff))
         except GitHubError as e:
-            self.db.insert_action(run_pk, "fix_pr", "failed", False, str(e), detail)
-            return {"fix_pr": f"failed: {e}"}
+            self.db.insert_action(run_pk, "fix_pr", "failed", False, explain(e), detail)
+            return {"fix_pr": f"failed: {explain(e)}", "branch": branch}
         detail["pr_url"] = pr.get("html_url")
         self.db.insert_action(run_pk, "fix_pr", "done", False, proposal.explanation, detail)
         return {"fix_pr": "opened", "url": pr.get("html_url")}

@@ -147,6 +147,40 @@ def test_lint_failure_gets_a_guarded_fix_pr_and_its_ci_is_tracked(world):
     assert kinds[0] == "fix_verified" and "fix_pr" in kinds
 
 
+def test_permission_errors_are_explained_in_plain_words(world):
+    """GitHub's 403s are what a new user hits first. The summary must say which setting to fix,
+    the diagnosis must survive, and the run must not crash."""
+    from ci_healer.action import summary_markdown
+    from ci_healer.github import GitHubError
+    healer, gh, an = world
+    gh.jobs[(300, 1)] = [make_job(9, "Lint")]
+    gh.logs[9] = RUFF_LOG
+    gh.files["src/demo/util.py"] = UTIL_PY
+    gh.branch_shas["feature/x"] = "a" * 40
+    an.proposals.append(remove_os_import())
+    gh.refuse["create_pull"] = GitHubError(
+        'POST /repos/o/r/pulls -> 403: {"message":"GitHub Actions is not permitted to create or '
+        'approve pull requests.","documentation_url":"https://docs.github.com/..."}')
+
+    r = healer.handle_workflow_run(payload(run_id=300))
+    assert r["decision"] == "fix_pr"
+    out = r["outcome"]["fix_pr"]
+    assert out.startswith("failed:") and "Allow GitHub Actions to create and approve pull requests" in out
+    assert r["outcome"]["branch"] == "ci-healer/fix-300-1"       # left behind, named for cleanup
+    md = summary_markdown(r, healer.settings)
+    assert "lint_format" in md and "Workflow permissions" in md
+    assert [a["kind"] for a in actions(healer)] == ["fix_pr"] and actions(healer)[0]["status"] == "failed"
+
+    # the other 403 wording → the permissions block
+    gh.refuse["rerun_failed_jobs"] = GitHubError(
+        'POST /repos/o/r/actions/runs/400/rerun-failed-jobs -> 403: '
+        '{"message":"Resource not accessible by integration"}')
+    gh.jobs[(400, 1)] = [make_job(10, "Test")]
+    gh.logs[10] = INFRA_LOG
+    r = healer.handle_workflow_run(payload(run_id=400))
+    assert r["decision"] == "rerun" and "`permissions:` block" in r["outcome"]["rerun"]
+
+
 def test_dry_run_records_the_plan_but_touches_nothing(world):
     healer, gh, an = world
     healer.settings = dataclasses.replace(healer.settings, dry_run=True)

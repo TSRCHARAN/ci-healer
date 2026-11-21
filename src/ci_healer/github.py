@@ -38,6 +38,29 @@ class GitHubError(RuntimeError):
     pass
 
 
+PERMISSION_HINTS = (
+    ("not permitted to create or approve pull requests",
+     "tick *Allow GitHub Actions to create and approve pull requests* "
+     "(repo Settings → Actions → General → Workflow permissions)"),
+    ("Resource not accessible by integration",
+     "the workflow's `permissions:` block must grant `actions: write`, `contents: write` "
+     "and `pull-requests: write`, or pass a PAT via `github-token`"),
+)
+
+
+def explain(e: GitHubError) -> str:
+    """GitHub's 403s are accurate but cryptic; the two a new user hits are translated into the
+    setting to change. Anything else is returned as-is."""
+    text = str(e)
+    for needle, hint in PERMISSION_HINTS:
+        if needle in text:
+            return f"{text} — permission problem: {hint}."
+    if "-> 403" in text:
+        return (f"{text} — permission problem: check the workflow's `permissions:` block and the "
+                "token passed as `github-token`.")
+    return text
+
+
 class GitHubClient:
     def __init__(self, token: str, base_url: str = API, transport: httpx.BaseTransport | None = None):
         self._http = httpx.Client(

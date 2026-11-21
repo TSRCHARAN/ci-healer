@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass, field
 
 import pytest
+from ci_healer.github import GitHubError
 
 from ci_healer.config import Settings
 from ci_healer.db import Database
@@ -74,6 +75,11 @@ class FakeGitHub:
     commits: list = field(default_factory=list)
     pulls: list = field(default_factory=list)
     comments: list = field(default_factory=list)
+    refuse: dict = field(default_factory=dict)      # method name -> GitHubError to raise
+
+    def _maybe_refuse(self, name):
+        if name in self.refuse:
+            raise self.refuse[name]
 
     def list_jobs(self, repo, run_id, attempt):
         return self.jobs.get((run_id, attempt), [])
@@ -85,6 +91,7 @@ class FakeGitHub:
         return []
 
     def rerun_failed_jobs(self, repo, run_id):
+        self._maybe_refuse("rerun_failed_jobs")
         self.reruns.append(run_id)
 
     def get_branch_sha(self, repo, branch):
@@ -97,6 +104,7 @@ class FakeGitHub:
         return self.files.get(path)
 
     def create_branch(self, repo, branch, sha):
+        self._maybe_refuse("create_branch")
         self.branches.append((branch, sha))
 
     def commit_files(self, repo, branch, parent_sha, files, message):
@@ -104,6 +112,7 @@ class FakeGitHub:
         return "c0ffee"
 
     def create_pull(self, repo, head, base, title, body):
+        self._maybe_refuse("create_pull")
         self.pulls.append({"head": head, "base": base, "title": title, "body": body})
         return {"html_url": f"https://github.com/{repo}/pull/{len(self.pulls)}"}
 
