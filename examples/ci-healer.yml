@@ -24,7 +24,7 @@ jobs:
       github.event.workflow_run.run_attempt > 1 ||
       startsWith(github.event.workflow_run.head_branch, 'ci-healer/')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15        # 2 LLM questions x llm-time-budget + install must fit
     steps:
       - uses: TSRCHARAN/ci-healer@v1
         with:
