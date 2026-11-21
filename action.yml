@@ -1,4 +1,4 @@
-name: "ci-healer — self-healing CI"
+name: "ci-healer"
 description: "Classify failed workflow runs (flaky / infra / lint / real break), retry transient failures, and open guarded fix PRs."
 author: "TSRCHARAN"
 branding:
