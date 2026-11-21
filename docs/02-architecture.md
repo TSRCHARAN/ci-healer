@@ -215,6 +215,10 @@ The Marketplace reads `action.yml` from the released tag, so a rename means a ne
 moves with it. A GitHub Release is created as a draft from the CLI; the Marketplace checkbox is
 UI-only, so the owner ticks it. Categories: *AI Assisted* (where the nearest neighbours sit) and
 *Continuous integration* (what it does).
+Published 2026-11-21 as v1.0.7 at https://github.com/marketplace/actions/ci-healer. v1.0.7 also
+translated the two GitHub 403s a new user hits first into the setting to change, because a
+first run that fails with "Resource not accessible by integration" and no pointer is where most
+people would give up.
 
 ## Measuring it (next step after dogfooding)
 

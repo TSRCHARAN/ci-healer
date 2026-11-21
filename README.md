@@ -14,6 +14,9 @@ Classification is cheap-first: known error signatures are matched by rules (free
 rest goes to an LLM — Anthropic, Gemini, Groq, OpenAI, OpenRouter, Mistral, DeepSeek, Together,
 Ollama, or any OpenAI-compatible endpoint.
 
+**On the Marketplace:** [marketplace/actions/ci-healer](https://github.com/marketplace/actions/ci-healer),
+or search "ci-healer" from any repo's Actions tab and click *Use this action*.
+
 **See it live:** [TSRCHARAN/ci-healer-demo](https://github.com/TSRCHARAN/ci-healer-demo) has
 branches that break on purpose and the PRs ci-healer opened for them.
 
